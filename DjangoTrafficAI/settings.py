@@ -9,7 +9,7 @@ https://docs.djangoproject.com/en/5.2/topics/settings/
 For the full list of settings and their values, see
 https://docs.djangoproject.com/en/5.2/ref/settings/
 """
-
+import os
 from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -38,7 +38,8 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
-    "events"
+    "events",
+    "pgvector.django"
 ]
 
 MIDDLEWARE = [
@@ -77,9 +78,17 @@ WSGI_APPLICATION = "DjangoTrafficAI.wsgi.application"
 
 DATABASES = {
     "default": {
-        "ENGINE": "django.db.backends.sqlite3",
-        "NAME": BASE_DIR / "db.sqlite3",
+        "ENGINE": "django.db.backends.postgresql",
+        "HOST": os.getenv("PGHOST", "127.0.0.1"),   # 或你的远程IP
+        "PORT": os.getenv("PGPORT", "5432"),
+        "NAME": os.getenv("PGDATABASE", "db_Traffic"),  # ← 就写 Db_Traffic
+        "USER": os.getenv("PGUSER", "postgres"),
+        "PASSWORD": os.getenv("PGPASSWORD", "abc0090"),
+        "CONN_MAX_AGE": 60,
+        # 如果你的表不在 public schema，取消下面注释并填你的 schema 名
+        # "OPTIONS": {"options": "-c search_path=your_schema,public"},
     }
+
 }
 
 

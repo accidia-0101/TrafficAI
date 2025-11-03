@@ -5,7 +5,7 @@ import cv2
 import numpy as np
 
 # -------- 你的原函数 --------
-async def run_frame_source(bus, camera_id: str, url_or_path: str, target_fps: float = 15):
+async def run_frame_source(bus, camera_id: str, url_or_path: str, target_fps: float = 60):
     cap = cv2.VideoCapture(url_or_path)  # read from file or web-camera
     try:
         interval = 1.0 / max(1e-3, target_fps)
@@ -82,7 +82,7 @@ async def main():
 
     print(f"▶ 开始读取视频: {video_path}")
     try:
-        await run_frame_source(bus, "CAM_TEST", video_path, target_fps=45)
+        await run_frame_source(bus, "CAM_TEST", video_path, target_fps=60)
     except StopAsyncIteration:
         print("⏹ 手动退出播放")
     finally:

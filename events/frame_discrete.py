@@ -9,7 +9,7 @@
 import cv2, time, asyncio, os
 from events.bus import Frame, AsyncBus
 
-async def run_frame_source(bus: AsyncBus, camera_id: str, url_or_path: str, target_fps: float = 45.0):
+async def run_frame_source(bus: AsyncBus, camera_id: str, url_or_path: str, target_fps: float = 60.0):
     cap = cv2.VideoCapture(url_or_path)
     try:
         interval = 1.0 / max(1e-3, target_fps)
@@ -25,6 +25,7 @@ async def run_frame_source(bus: AsyncBus, camera_id: str, url_or_path: str, targ
 
             now = time.time()
             if now - last_emit < interval:
+                await asyncio.sleep(0)
                 # 主动丢帧控速，避免后端积压
                 continue
             last_emit = now
