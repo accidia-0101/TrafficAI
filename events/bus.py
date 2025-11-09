@@ -1,11 +1,17 @@
-# events/bus.py
+
 from dataclasses import dataclass
-from typing import Any, Optional, Dict, List, Tuple
-import numpy as np, asyncio
+from typing import Any, Optional, Dict, List, Final
+import numpy as np
+import asyncio
 from contextlib import asynccontextmanager
 
-# ---------- 数据结构 ----------
-@dataclass
+# ----------- 主题分区工具（建议：按 camera_id 分区，减少消费端过滤负担） -----------
+def topic_for(base: str, camera_id: Optional[str] = None) -> str:
+    """构造分区主题名，如 detections:cam-1 / frames_raw:cam-2；无 id 则返回 base"""
+    return f"{base}:{camera_id}" if camera_id else base
+
+# ----------- 数据结构（slots 节省内存 & 提升属性访问性能） -----------
+@dataclass(slots=True)
 class Frame:
     camera_id: str
     ts_unix: float
@@ -13,27 +19,29 @@ class Frame:
     frame_idx: int = 0            # 帧号（从 0 递增）
     pts_in_video: float = 0.0     # 相对视频起点秒
 
-@dataclass
+@dataclass(slots=True)
 class Detection:
     type: str                     # accident/weather/...
     camera_id: str
     ts_unix: float
     happened: bool
     confidence: float
-    # 补这两项，保证和 HLS 时间轴对齐（可选）
-    frame_idx: int = 0
-    pts_in_video: float = 0.0
+    frame_idx: int = 0            # 对齐帧号（可选但推荐）
+    pts_in_video: float = 0.0     # 对齐媒体时间轴（秒）
 
-# ---------- 订阅端适配器 ----------
+# ----------- 订阅端适配器（非阻塞投递） -----------
 class _Subscriber:
     __slots__ = ("queue", "mode")
     def __init__(self, mode: str, maxsize: int):
         self.mode = mode  # "fifo" or "latest"
-        self.queue: asyncio.Queue = asyncio.Queue(maxsize=maxsize)
+        # latest 模式固定容量 1（只保留最新）
+        cap = 1 if mode == "latest" else max(1, int(maxsize))
+        self.queue: asyncio.Queue = asyncio.Queue(maxsize=cap)
 
-    async def deliver(self, item: Any):
+    # 改为同步方法：不 await，不阻塞发布者
+    def deliver(self, item: Any) -> None:
         if self.mode == "latest":
-            # 保证“最新优先”：满了就丢掉最旧的，再放新
+            # 始终保存“最新”，丢弃旧元素，不阻塞
             if self.queue.full():
                 try:
                     self.queue.get_nowait()
@@ -42,27 +50,36 @@ class _Subscriber:
             try:
                 self.queue.put_nowait(item)
             except asyncio.QueueFull:
-                # 极端并发下再次满，直接覆盖：先清，再放
+                # 极端竞态下再次满：清空后再放（仍然非阻塞）
                 try:
-                    while not self.queue.empty():
+                    while True:
                         self.queue.get_nowait()
-                except Exception:
+                except asyncio.QueueEmpty:
                     pass
-                await self.queue.put(item)
+                try:
+                    self.queue.put_nowait(item)
+                except asyncio.QueueFull:
+                    # 理论上不应发生；保守忽略
+                    pass
         else:
-            # FIFO：尽量不丢帧；但不阻塞 publisher
+            # FIFO：尽量不丢，但**确保发布端不被阻塞**
             try:
                 self.queue.put_nowait(item)
             except asyncio.QueueFull:
-                # 保守策略：丢最旧，腾位放新，防“全链路被一个慢订阅者拖死”
+                # 丢最旧，腾位再放；这会让慢订阅者“不影响”其他链路
                 try:
                     self.queue.get_nowait()
                 except asyncio.QueueEmpty:
                     pass
-                await self.queue.put(item)
+                try:
+                    self.queue.put_nowait(item)
+                except asyncio.QueueFull:
+                    # 仍然满（极端竞态）：放弃本条，保护全链路
+                    pass
 
-# ---------- 异步总线 ----------
+# ----------- 异步总线 -----------
 class AsyncBus:
+    __slots__ = ("_topics", "_lock")
     def __init__(self):
         self._topics: Dict[str, List[_Subscriber]] = {}
         self._lock = asyncio.Lock()
@@ -70,10 +87,12 @@ class AsyncBus:
     @asynccontextmanager
     async def subscribe(self, topic: str, *, mode: str = "fifo", maxsize: int = 64):
         """
-        mode = "fifo"  ：分析/采样等需要按序处理的消费者
-        mode = "latest": 推流/预览等只关心最新帧的消费者（典型：HLS/MJPEG）
+        订阅主题：
+          - mode="fifo"   ：按序处理（分析/检测链路）
+          - mode="latest" ：只关心最新（预览/诊断）
+        注意：请优先使用分区主题，如 topic_for("detections", camera_id)
         """
-        sub = _Subscriber(mode=mode, maxsize=maxsize if mode == "fifo" else 1)
+        sub = _Subscriber(mode=mode, maxsize=maxsize)
         async with self._lock:
             self._topics.setdefault(topic, []).append(sub)
         try:
@@ -83,34 +102,6 @@ class AsyncBus:
                 lst = self._topics.get(topic, [])
                 if sub in lst:
                     lst.remove(sub)
-
-    def subscribe_legacy(self, topic: str, *, mode: str = "fifo", maxsize: int = 64) -> asyncio.Queue:
-        """
-        兼容你现有的 q = bus.subscribe("frames") 写法：
-        返回 queue，但内部也注册了取消逻辑（需要调用者不关心）。
-        """
-        # 用 asynccontextmanager 包一层同步取出 queue（不推荐新代码用）
-        loop = asyncio.get_event_loop()
-        q_holder: Tuple[asyncio.Queue] = (None,)  # trick: 可变闭包
-        async def _enter():
-            cm = self.subscribe(topic, mode=mode, maxsize=maxsize)
-            q = await cm.__aenter__()
-            q_holder_list.append(cm)
-            return q
-        q_holder_list = []
-        q = loop.run_until_complete(_enter())
-        return q
-
-    async def publish(self, topic: str, item: Any):
-        # 拷贝列表，避免发布过程中订阅变更影响遍历
-        async with self._lock:
-            subs = list(self._topics.get(topic, []))
-        if not subs:
-            return
-        # 逐个投递；不 await gather，避免短时间创建过多任务影响调度
-        for sub in subs:
-            try:
-                await sub.deliver(item)
-            except Exception:
-                # 单个订阅者异常不影响其他订阅者
-                pass
+                if not lst:
+                    # 清理空列表，防内存增长
+                    self._topics.pop(topic, None)

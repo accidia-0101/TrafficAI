@@ -25,11 +25,14 @@ SECRET_KEY = "django-insecure-$&u&+jwig1vyz85usbfdb8em44_uej)vo5an7_%-(!)dvdqcks
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = ['127.0.0.1', 'localhost']
 
 USE_TZ = True
 TIME_ZONE = 'UTC'
 # Application definition
+# ---- 静态文件配置（Django 自带要求） ----
+STATIC_URL = '/static/'
+
 
 INSTALLED_APPS = [
     "django.contrib.admin",
@@ -39,7 +42,9 @@ INSTALLED_APPS = [
     "django.contrib.messages",
     "django.contrib.staticfiles",
     "events",
-    "pgvector.django"
+    "pgvector.django",
+    'api',
+    'corsheaders'
 ]
 
 MIDDLEWARE = [
@@ -50,6 +55,7 @@ MIDDLEWARE = [
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
+    'corsheaders.middleware.CorsMiddleware'
 ]
 
 ROOT_URLCONF = "DjangoTrafficAI.urls"
@@ -118,14 +124,9 @@ LANGUAGE_CODE = "en-us"
 
 USE_I18N = True
 
+import os
+HLS_OUT_ROOT = os.environ.get("HLS_OUT_ROOT", r"E:\Training\hls_out")
+CORS_ALLOW_ALL_ORIGINS = True
+CSRF_TRUSTED_ORIGINS = ["http://127.0.0.1:3000"]
 
-
-# Static files (CSS, JavaScript, Images)
-# https://docs.djangoproject.com/en/5.2/howto/static-files/
-
-STATIC_URL = "static/"
-
-# Default primary key field type
-# https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
-
-DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+STATICFILES_DIRS = [BASE_DIR / "static"]

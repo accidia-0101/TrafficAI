@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>SSE 事故告警监视器</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; margin: 24px; background:#0b0d10; color:#d6deeb; }
+    .row { display:flex; gap:8px; align-items:center; margin-bottom:12px; }
+    input, button { font-size:14px; padding:8px 10px; border-radius:8px; border:1px solid #334; background:#12161b; color:#d6deeb; }
+    button { cursor:pointer; }
+    button.primary { background:#2b6; border-color:#2b6; color:#021; font-weight:600; }
+    button.warn { background:#c44; border-color:#c44; color:#fee; }
+    #log { height: 60vh; overflow:auto; background:#0e1318; border:1px solid #223; border-radius:10px; padding:12px; line-height:1.5; white-space:pre-wrap; }
+    .tag { padding:2px 6px; border-radius:999px; font-weight:700; font-size:12px; margin-right:6px;}
+    .open { background:#1e3; color:#020; }
+    .close { background:#e31; color:#fff; }
+    .hello { background:#39f; color:#002; }
+  </style>
+</head>
+<body>
+  <h2>SSE 事故告警监视器</h2>
+
+  <div class="row">
+    <label for="cid">camera_id</label>
+    <input id="cid" placeholder="例如 cam-1" value="cam-1" />
+    <button id="btnConnect" class="primary">连接 SSE</button>
+    <button id="btnDisconnect" class="warn">断开</button>
+    <span id="status">未连接</span>
+  </div>
+
+  <div class="row">
+    <button id="btnStart">（可选）POST /api/analysis/start</button>
+  </div>
+
+  <div id="log" aria-live="polite"></div>
+
+  <script>
+    let es = null;
+    const $ = (id) => document.getElementById(id);
+    const log = (html) => {
+      const box = $("log");
+      const time = new Date().toLocaleTimeString();
+      box.insertAdjacentHTML("beforeend", `[${time}] ${html}\n`);
+      box.scrollTop = box.scrollHeight;
+    };
+
+    function connect() {
+    const cid = $("cid").value.trim();
+    if (!cid) { alert("请输入 camera_id"); return; }
+    if (es) es.close();
+
+    const url = `/sse/alerts?camera_id=${encodeURIComponent(cid)}`;
+    es = new EventSource(url);
+
+    es.onopen = () => { $("status").textContent = "已连接"; log(`<span class="tag hello">HELLO</span> 连接到 ${url}`); };
+    es.onerror = (e) => { $("status").textContent = "连接错误/已断开"; console.error(e); };
+
+    // 默认类型（后端没有写 event: 的消息）
+    es.onmessage = (ev) => {
+      try {
+        const data = JSON.parse(ev.data);
+        const t = data.type || "message";
+        if (t === "accident_open") {
+          log(`<span class="tag open">OPEN</span> ${ev.data}`);
+        } else if (t === "accident_close") {
+          log(`<span class="tag close">CLOSE</span> ${ev.data}`);
+        } else {
+          log(`${ev.data}`);
+        }
+      } catch {
+        log(ev.data);
+      }
+    };
+
+    // 命名事件（后端写了 event: xxx 的情况）
+    es.addEventListener("accident_open", (ev) => {
+      log(`<span class="tag open">OPEN</span> ${ev.data}`);
+    });
+    es.addEventListener("accident_close", (ev) => {
+      log(`<span class="tag close">CLOSE</span> ${ev.data}`);
+    });
+    es.addEventListener("session_begin", (ev) => {
+      log(`▶️ ${ev.data || "session_begin"}`);
+    });
+    es.addEventListener("session_end", (ev) => {
+      log(`⏹ ${ev.data || "session_end"}`);
+    });
+    es.addEventListener("heartbeat", (ev) => {
+      log(`💓 heartbeat ${ev.data || ""}`);
+    });
+  }
+
+    function disconnect() {
+      if (es) { es.close(); es = null; }
+      $("status").textContent = "未连接";
+      log("🔌 已断开");
+    }
+
+    async function startAnalysis() {
+      const cid = $("cid").value.trim();
+      if (!cid) { alert("请输入 camera_id"); return; }
+      try {
+        const form = new FormData();
+        form.append("camera_id", cid);
+        const res = await fetch("/api/analysis/start", { method: "POST", body: form });
+        const js = await res.json();
+        log(`▶️ start 返回：${JSON.stringify(js)}`);
+      } catch (e) {
+        log(`❌ start 出错：${e}`);
+      }
+    }
+
+    $("btnConnect").onclick = connect;
+    $("btnDisconnect").onclick = disconnect;
+    $("btnStart").onclick = startAnalysis;
+  </script>
+</body>
+</html>

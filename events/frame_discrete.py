@@ -9,29 +9,34 @@
 import cv2, time, asyncio, os
 from events.bus import Frame, AsyncBus
 
+
+
 async def run_frame_source_raw(bus: AsyncBus, camera_id: str, url_or_path: str):
+
     """
     不降帧：解码每一帧，发布到 'frames_raw'
     - frame_idx 从0开始计数
     - pts_in_video：文件源用 frame_idx/src_fps；直播源用单调时钟近似
     """
-    cap = cv2.VideoCapture(url_or_path)
+    print(f"[{camera_id}] frame source opened:", url_or_path)
+    cap = cv2.VideoCapture(url_or_path,cv2.CAP_FFMPEG)
     try:
         is_file = os.path.exists(url_or_path)
         src_fps = cap.get(cv2.CAP_PROP_FPS) or 0.0
         src_fps = src_fps if src_fps and src_fps < 1000 else 0.0  # 有些容器会返回诡异的大数
         start_mono = time.monotonic()
-        start_wall = time.time()
         frame_idx = 0
 
         while True:
             ok, bgr = cap.read()
             if not ok:
+                print(f"[{camera_id}] no frame, break")
                 if is_file:
                     break
                 await asyncio.sleep(0.01)  # 直播断帧，等一会儿
                 continue
-
+            else:
+                print(f"[{camera_id}] got frame", frame_idx)
             # 统一用 RGB
             rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
 
@@ -61,7 +66,7 @@ async def run_frame_source_raw(bus: AsyncBus, camera_id: str, url_or_path: str):
                 pass
 
 
-async def run_sampler_equal_time(bus: AsyncBus, camera_id: str, target_fps: float = 15.0, jitter_epsilon: float = 1e-4):
+async def run_sampler_equal_time(bus: AsyncBus, camera_id: str, target_fps: float = 60.0, jitter_epsilon: float = 1e-4):
     """
     等时采样（时间网格）：
       订阅 frames_raw（同一 camera），按固定时间步长 1/target_fps 选帧
@@ -85,54 +90,10 @@ async def run_sampler_equal_time(bus: AsyncBus, camera_id: str, target_fps: floa
             # 用 while 保证“跳秒”时能连发多帧，保持时间网格不漂移
             emitted = False
             while f.pts_in_video + jitter_epsilon >= next_t:
+                print(f"[{camera_id}] sampler started")
                 await bus.publish("frames", f)
                 next_t += step
                 emitted = True
-
+                print(f"[{camera_id}] sampler emit t={f.pts_in_video:.3f}")
             if not emitted:
                 await asyncio.sleep(0)
-
-
-# 兼容保留：原来的“为分析降帧”的函数（若已有地方直接用它）
-async def run_frame_source(bus: AsyncBus, camera_id: str, url_or_path: str, target_fps: float = 60.0):
-    """
-    原函数：为分析而降帧（发布 'frames'）
-    ——保留以兼容旧逻辑；新架构建议用 run_frame_source_raw + run_sampler_equal_time
-    """
-    cap = cv2.VideoCapture(url_or_path)
-    try:
-        interval = 1.0 / max(1e-3, target_fps)
-        last_emit = 0.0
-        is_file = os.path.exists(url_or_path)
-        src_fps = cap.get(cv2.CAP_PROP_FPS) or 0.0
-        src_fps = src_fps if src_fps and src_fps < 1000 else 0.0
-        frame_idx = 0
-        start_mono = time.monotonic()
-
-        while True:
-            ok, bgr = cap.read()
-            if not ok:
-                if is_file:
-                    break
-                await asyncio.sleep(0.02)
-                continue
-
-            now = time.time()
-            if now - last_emit < interval:
-                await asyncio.sleep(0)
-                frame_idx += 1
-                continue
-
-            last_emit = now
-            rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-            pts = (frame_idx / src_fps) if src_fps > 0 else (time.monotonic() - start_mono)
-            frame = Frame(camera_id=camera_id, ts_unix=now, rgb=rgb, frame_idx=frame_idx, pts_in_video=pts)
-            await bus.publish("frames", frame)
-            frame_idx += 1
-            await asyncio.sleep(0)
-    finally:
-        cap.release()
-        try:
-            cv2.destroyAllWindows()
-        except Exception:
-            pass

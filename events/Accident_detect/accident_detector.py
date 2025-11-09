@@ -1,111 +1,107 @@
 # detector_accident.py
 """
-YOLOv8 单类事故检测（固定使用训练好的 best.pt）
+YOLOv8 单类事故检测（参数锁定版）
 
-输入：
-- 订阅 'frames'（注意：这是“等时采样后”的帧流）
-- 每帧需带 frame_idx 与 pts_in_video（由采样器/帧源填充）
-
-输出：
-- 发布到 'detections'，同时携带 frame_idx / pts_in_video，方便前端或叠加对齐 HLS 播放时间
+- 输入：订阅 'frames'（等时采样后的帧流）
+- 输出：发布 'detections'（附带 frame_idx / pts_in_video）
+- 所有模型与阈值参数均已锁定，不允许外部更改
 """
 
 from __future__ import annotations
-import asyncio, time
+
+import asyncio
 from typing import Optional
+
 import numpy as np
+
 from events.bus import Frame, Detection, AsyncBus
 
-MODEL_PATH = r"E:\PythonProject\DjangoTrafficAI\events\pts\best.pt"
+# -------------------------------
+# 固定配置区（不允许更改）
+# -------------------------------
+_MODEL_PATH = r"E:\PythonProject\DjangoTrafficAI\events\pts\best.pt"
+_IMG_SIZE = 960
+_YOLO_CONF = 0.05
+_YOLO_IOU = 0.50
+_DECISION_THRESH = 0.65
+_DEVICE = 0  # GPU:0；如需CPU自行修改此文件，而不是外部参数
+# -------------------------------
+
 
 class AccidentDetector:
-    """YOLOv8 单类事故检测引擎"""
-    def __init__(
-        self,
-        *,
-        imageSize: int = 960,
-        yolo_conf: float = 0.05,
-        yolo_iou: float = 0.50,
-        device: Optional[str | int] = 0,  # 默认 GPU:0；改 "cpu" 可走 CPU
-    ):
+    """YOLOv8 单类事故检测引擎（参数锁定）"""
+
+    def __init__(self):
         try:
             from ultralytics import YOLO
         except Exception as e:
             raise RuntimeError("缺少 ultralytics，请先 pip install ultralytics") from e
 
-        self.imageSize = imageSize
-        self.yolo_conf = yolo_conf
-        self.yolo_iou = yolo_iou
-        self.device = device
-
-        print(f"🔹 正在加载模型权重: {MODEL_PATH}")
-        self._yolo = YOLO(MODEL_PATH)
+        print(f"🔹 正在加载模型权重: {_MODEL_PATH}")
+        self._yolo = YOLO(_MODEL_PATH)
         if hasattr(self._yolo, "overrides"):
-            self._yolo.overrides["conf"] = yolo_conf
-            self._yolo.overrides["iou"] = yolo_iou
-            self._yolo.overrides["device"] = device
+            self._yolo.overrides["conf"] = _YOLO_CONF
+            self._yolo.overrides["iou"] = _YOLO_IOU
+            self._yolo.overrides["device"] = _DEVICE
 
-        # 可选：空张量预热，降低首帧抖动（GPU 时更明显）
+        # GPU 预热
         try:
-            dummy = np.zeros((self.imageSize, self.imageSize, 3), dtype=np.uint8)
-            _ = self._yolo.predict(dummy, imgsz=self.imageSize, conf=self.yolo_conf, iou=self.yolo_iou, verbose=False, device=self.device)
+            dummy = np.zeros((_IMG_SIZE, _IMG_SIZE, 3), dtype=np.uint8)
+            _ = self._yolo.predict(
+                dummy,
+                imgsz=_IMG_SIZE,
+                conf=_YOLO_CONF,
+                iou=_YOLO_IOU,
+                verbose=False,
+                device=_DEVICE,
+            )
         except Exception:
             pass
 
+    # ---------------------------
     def infer_frame_conf(self, rgb: np.ndarray) -> float:
-        """
-        单帧推理 → 帧级置信度：
-          - 无框：0.0
-          - 有框：max(boxes.conf)
-        """
+        """单帧推理 → 帧级置信度"""
         res = self._yolo.predict(
             rgb,
-            imgsz=self.imageSize,
-            conf=self.yolo_conf,
-            iou=self.yolo_iou,
+            imgsz=_IMG_SIZE,
+            conf=_YOLO_CONF,
+            iou=_YOLO_IOU,
             verbose=False,
-            device=self.device,
+            device=_DEVICE,
         )[0]
 
         boxes = getattr(res, "boxes", None)
         if boxes is None or len(boxes) == 0:
             return 0.0
-        confs = boxes.conf
+        confs = getattr(boxes, "conf", None)
         if confs is None or len(confs) == 0:
             return 0.0
         return float(confs.max().item())
 
 
-async def run_accident_detector(
-    bus: AsyncBus,
-    *,
-    decision_thresh: float = 0.65,  # 帧级判定阈值
-    imgsz: int = 960,
-    yolo_conf: float = 0.05,
-    yolo_iou: float = 0.50,
-    device: Optional[str | int] = 0,
-):
+# =========================================================
+# 运行函数（外部唯一入口，不允许自定义参数）
+# =========================================================
+async def run_accident_detector(bus: AsyncBus, *, camera_id: Optional[str] = None):
+    print(f"[{camera_id}] detector started, waiting frames")
     """
-    订阅 'frames'（采样后的帧流）→ YOLO 推理 → 发布 'detections'
-    发布的 Detection 携带 frame_idx 与 pts_in_video，保证与 HLS 时间轴对齐。
+    内部固定参数版本：
+      - 不接受外部阈值、尺寸、设备参数
+      - 直接使用本文件预设的模型与阈值
     """
-    engine = AccidentDetector(
-        imageSize=imgsz,
-        yolo_conf=yolo_conf,
-        yolo_iou=yolo_iou,
-        device=device,
-    )
-
+    engine = AccidentDetector()
     loop = asyncio.get_running_loop()
 
-    # ✅ 正确的异步上下文写法
     async with bus.subscribe("frames") as q:
         while True:
             frame: Frame = await q.get()
+            print(f"[{camera_id}] received frame {frame.frame_idx}")
+            if camera_id and frame.camera_id != camera_id:
+                continue
 
-            # ✅ 将推理放在线程池里，避免阻塞 asyncio 循环
+            # 在线程池中执行推理（防止阻塞事件循环）
             frame_conf = await loop.run_in_executor(None, engine.infer_frame_conf, frame.rgb)
-            happened = frame_conf >= decision_thresh
+            happened = frame_conf >= _DECISION_THRESH
 
             det = Detection(
                 type="accident",
@@ -116,6 +112,6 @@ async def run_accident_detector(
                 frame_idx=getattr(frame, "frame_idx", 0),
                 pts_in_video=getattr(frame, "pts_in_video", 0.0),
             )
+            print(f"[{camera_id}] conf={frame_conf:.3f}, happened={happened}")
             await bus.publish("detections", det)
             await asyncio.sleep(0)
-
