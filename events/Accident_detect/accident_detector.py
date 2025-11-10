@@ -112,12 +112,12 @@ async def run_accident_detector_multi(
 
     async def _collector(cam: str):
         topic_in = topic_for("frames", cam)
+
         async with bus.subscribe(topic_in, mode="fifo", maxsize=64) as q:
             while True:
                 f: Frame = await q.get()
                 bufs[cam].append(f)
-                # 逐帧日志（可按需关闭）
-                # print(f"[in ][{cam}] idx={f.frame_idx} pts={f.pts_in_video:.3f}")
+                print(f"[collector] {cam} idx={f.frame_idx} pts={f.pts_in_video}")
 
     collectors = [asyncio.create_task(_collector(cam)) for cam in camera_ids]
 

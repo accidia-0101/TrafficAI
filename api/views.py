@@ -70,16 +70,18 @@ def alerts_stream(request: HttpRequest):
     def _start_pipe(topic: str):
         async def _pipe():
             async with rt.BUS.subscribe(topic, mode="fifo", maxsize=64) as subq:
+
                 while True:
                     evt = await subq.get()
+                    print(f"[SSE] received topic={topic} evt={evt}")
                     payload = {
-                        "camera_id": cid,
-                        "type": getattr(evt, "type", "accident"),
-                        "happened": getattr(evt, "happened", True),
-                        "confidence": getattr(evt, "confidence", 0.0),
-                        "ts_unix": getattr(evt, "ts_unix", time.time()),
-                        "frame_idx": getattr(evt, "frame_idx", None),
-                        "pts_in_video": getattr(evt, "pts_in_video", None),
+                        "camera_id": evt.get("camera_id"),
+                        "type": evt.get("type"),
+                        "happened": evt.get("happened", True),
+                        "confidence": evt.get("confidence", 0.0),
+                        "ts_unix": time.time(),
+                        "frame_idx": evt.get("frame_idx"),
+                        "pts_in_video": evt.get("pts_in_video"),
                     }
                     data = f"data: {json.dumps(payload, ensure_ascii=False)}\n\n".encode()
                     try:

@@ -90,19 +90,23 @@ class AccidentAggregator:
     #     print(f"🚨 OPEN {ev}")
     async def _emit_open(self, inc: _Incident, det: Detection | None = None) -> None:
         ev = {
+            # "type": "accident_open",
+            # "session_id": self.session_id,
+            # "incident_id": inc.id,
+            # "camera_id": self.camera_id,
+            # "start_ts": inc.start_ts,
+            # "start_frame_idx": inc.start_idx,
+            # "peak_confidence": inc.peak_conf,
             "type": "accident_open",
+            "camera_id": self.camera_id,
+            "frame_idx": inc.start_idx,  # ← 改名，统一
+            "pts_in_video": inc.start_ts,  # ← 改名，统一
+            "confidence": inc.peak_conf,  # ← 改名，统一
             "session_id": self.session_id,
             "incident_id": inc.id,
-            "camera_id": self.camera_id,
-            "start_ts": inc.start_ts,
-            "start_frame_idx": inc.start_idx,
             "peak_confidence": inc.peak_conf,
         }
-        # ==== 新增帧信息 ====
-        if det is not None:
-            ev["frame_idx"] = getattr(det, "frame_idx", None)
-            ev["pts_in_video"] = getattr(det, "pts_in_video", None)
-            ev["confidence"] = getattr(det, "confidence", None)
+
         await self.bus.publish(topic_for(_TOPIC_OPEN_BASE, self.camera_id), ev)
         print(f"🚨 OPEN {ev}")
     # async def _schedule_close(self, inc: _Incident) -> None:
@@ -128,20 +132,15 @@ class AccidentAggregator:
         """结案并进入合并观察窗口"""
         close_ev = {
             "type": "accident_close",
+            "camera_id": self.camera_id,
+            "frame_idx": inc.end_idx,          # ← 改名
+            "pts_in_video": inc.end_ts,        # ← 改名
+            "confidence": inc.peak_conf,       # ← 改名
             "session_id": self.session_id,
             "incident_id": inc.id,
-            "camera_id": self.camera_id,
-            "start_ts": inc.start_ts,
-            "end_ts": inc.end_ts,
             "duration_sec": max(0.0, inc.end_ts - inc.start_ts),
             "peak_confidence": inc.peak_conf,
-            "pos_frames": inc.pos_frames,
         }
-        # ==== 新增帧信息 ====
-        if det is not None:
-            close_ev["frame_idx"] = getattr(det, "frame_idx", None)
-            close_ev["pts_in_video"] = getattr(det, "pts_in_video", None)
-            close_ev["confidence"] = getattr(det, "confidence", None)
 
         self._pending_close = close_ev
         self._pending_close_time = inc.end_ts
