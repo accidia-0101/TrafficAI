@@ -39,7 +39,7 @@ class Frame:
     rgb: np.ndarray
     frame_idx: int = 0
     pts_in_video: float = 0.0
-
+    vts: float = 0.0
 
 @dataclass(slots=True)
 class Detection:
@@ -50,6 +50,7 @@ class Detection:
     confidence: float
     frame_idx: int = 0
     pts_in_video: float = 0.0
+    vts: float = 0.0
 
 
 # Subscriber Side
@@ -137,23 +138,40 @@ class AsyncBus:
         """Subscribe to multiple topics at once and merge their output queues."""
         subs: List[_Subscriber] = []
         merged_q: asyncio.Queue = asyncio.Queue(maxsize=maxsize)
+        forward_tasks: List[asyncio.Task] = []
 
         async def forward(sub: _Subscriber):
-            while True:
-                item = await sub.queue.get()
-                await merged_q.put(item)
+            try:
+                while True:
+                    item = await sub.queue.get()
+                    await merged_q.put(item)
+            except asyncio.CancelledError:
+                # 任务被取消时优雅退出
+                return
 
+        # 注册 subscribers
         async with self._lock:
             for t in topics:
                 s = _Subscriber(mode=mode, maxsize=maxsize)
                 self._topics.setdefault(t, []).append(s)
                 subs.append(s)
                 print(f"[bus] subscribe_many -> {t}")
-                asyncio.create_task(forward(s))
+                # 创建任务并保存引用
+                forward_tasks.append(asyncio.create_task(forward(s)))
 
         try:
             yield merged_q
+
         finally:
+            # ★ 取消 forward tasks
+            for task in forward_tasks:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+
+            # ★ 注销 subscriber
             async with self._lock:
                 for t, s in zip(topics, subs):
                     lst = self._topics.get(t)
@@ -162,7 +180,6 @@ class AsyncBus:
                     if lst == []:
                         self._topics.pop(t, None)
                     print(f"[bus] unsubscribe_many -> {t}")
-
 
     async def publish(self, topic: str, item: Any) -> None:
         async with self._lock:

@@ -63,3 +63,13 @@ AsyncBus  异步并发（asynchronous concurrency）。
 [Epoch 3/5] TrainLoss=70.039 TrainAcc=0.9135 | ValLoss=8.824 ValAcc=0.9033
 [Epoch 4/5] TrainLoss=55.750 TrainAcc=0.9346 | ValLoss=8.649 ValAcc=0.9142
 [Epoch 5/5] TrainLoss=42.907 TrainAcc=0.9518 | ValLoss=8.304 ValAcc=0.9237
+
+
+# 细节调参之后的metrics
+![img_5.png](img_5.png)
+
+# FP
+![img_10.png](img_10.png)
+
+# FN
+![img_7.png](img_7.png)
