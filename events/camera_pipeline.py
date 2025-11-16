@@ -15,7 +15,7 @@ import asyncio
 from typing import List, Optional
 
 from events.bus import AsyncBus
-from events.frame_discrete import run_frame_source_raw, run_sampler_equal_time
+from events.frame_discrete import run_frame_source_raw, run_sampler_equal_time_vts
 
 
 class SingleFileSession:
@@ -59,7 +59,7 @@ class SingleFileSession:
 
             # Start the frame source, sampler, and aggregator
             t_src = asyncio.create_task(run_frame_source_raw(self.bus, self.camera_id, self.file_path))
-            t_smp = asyncio.create_task(run_sampler_equal_time(self.bus, self.camera_id))
+            t_smp = asyncio.create_task(run_sampler_equal_time_vts(self.bus, self.camera_id))
             t_agg = asyncio.create_task(aggregator.run())
             self._tasks = [t_src, t_smp, t_agg]
             print(f"[session] started {self.camera_id}")

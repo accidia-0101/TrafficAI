@@ -240,7 +240,7 @@ class SessionManager:
                     + [f"weather:{cid}" for cid in camera_ids]
             )
 
-            async with rt.BUS.subscribe_many(topics, mode="fanout", maxsize=64) as subq:
+            async with rt.BUS.subscribe_many(topics, mode="fifo", maxsize=64) as subq:
                 while True:
                     evt = await subq.get()
                     cid = evt.get("camera_id", "unknown")
