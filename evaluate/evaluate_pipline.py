@@ -1,17 +1,17 @@
 import asyncio
-import os
-import glob
 import csv
-import numpy as np
+import glob
+import os
+
 import matplotlib.pyplot as plt
+import numpy as np
 import seaborn as sns
 from sklearn.metrics import confusion_matrix
 
-from events.bus import AsyncBus, topic_for
-from events.frame_discrete import run_frame_source_raw, run_sampler_equal_time_vts
 from events.Accident_detect import accident_detector as accident_det
 from events.Accident_detect.incident_aggregator import AccidentAggregator
-
+from events.bus import AsyncBus, topic_for
+from events.frame_discrete import run_frame_source_raw, run_sampler_equal_time_vts
 
 # ====== 路径配置 ======
 BASE_DIR = r"E:\Training\traffic_video"
@@ -25,9 +25,7 @@ FINETUNED_MODEL = (
 BASELINE_MODEL = "yolov8m.pt"
 
 
-# ----------------------------------------------------------
 # 1. Parse labels from filename
-# ----------------------------------------------------------
 def parse_labels_from_filename(path: str):
     """
     期望命名格式:
@@ -49,9 +47,8 @@ def parse_labels_from_filename(path: str):
     return f"cam-{cam_id}", has_acc, weather
 
 
-# ----------------------------------------------------------
 # 2. Build CAMERA_SOURCES
-# ----------------------------------------------------------
+
 def build_camera_sources():
     sources = {}
     for path in glob.glob(fr"{BASE_DIR}\*.mp4"):
@@ -64,9 +61,9 @@ def build_camera_sources():
     return sources
 
 
-# ----------------------------------------------------------
+
 # 3. Evaluate single clip (full pipeline, with safe cleanup)
-# ----------------------------------------------------------
+
 async def eval_single_clip(cam: str, src: str, gt: int):
     print(f"  - Evaluating {cam}")
 
@@ -94,8 +91,8 @@ async def eval_single_clip(cam: str, src: str, gt: int):
     listener_task = asyncio.create_task(event_listener())
 
     # Pipeline
-    frame_task = asyncio.create_task(run_frame_source_raw(bus, cam, src))
-    sampler_task = asyncio.create_task(run_sampler_equal_time_vts(bus, cam, target_fps=30))
+    frame_task = asyncio.create_task(run_frame_source_raw(bus, cam, src,simulate_realtime=False))
+    sampler_task = asyncio.create_task(run_sampler_equal_time_vts(bus, cam, target_fps=15))
     detector_task = asyncio.create_task(
         accident_det.run_accident_detector_multi(bus, camera_ids=[cam], batch_size=4)
     )

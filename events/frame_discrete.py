@@ -19,49 +19,74 @@ import asyncio
 from events.bus import Frame, AsyncBus, topic_for
 
 
-async def run_frame_source_raw(bus: AsyncBus, camera_id: str, url_or_path: str):
+
+async def run_frame_source_raw(
+    bus: AsyncBus,
+    camera_id: str,
+    url_or_path: str,
+    *,
+    simulate_realtime: bool = False,     # 是否模拟监控真实推帧
+):
     """
-    Non-downsampled video source: decode frames sequentially and publish to frames_raw:<camera_id>
-    - Each frame includes frame_idx and pts_in_video (video timestamp in seconds)
+    Non-downsampled video source:
+    - decode frames sequentially
+    - publish to frames_raw:<camera_id>
+    - If simulate_realtime=True, frames are pushed according to original FPS timing.
     """
 
     cap = cv2.VideoCapture(url_or_path, cv2.CAP_FFMPEG)
+
     try:
         is_file = os.path.exists(url_or_path)
         src_fps = cap.get(cv2.CAP_PROP_FPS) or 0.0
         src_fps = src_fps if src_fps and src_fps < 1000 else 0.0
+
         start_mono = time.monotonic()
         frame_idx = 0
 
         while True:
             ok, bgr = cap.read()
             if not ok:
-                # Exit when the file ends; for live sources, wait briefly
+                # 文件结束 → 真退出
                 if is_file:
                     break
+
+                # 直播流 → 等待下一帧
                 await asyncio.sleep(0.01)
                 continue
 
             rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-            # 原始 pts：保留给前端伪同步和 debug
-            pts = frame_idx / src_fps if src_fps > 0 else (time.monotonic() - start_mono)
+
+            # 真实视频 pts
+            if src_fps > 0:
+                pts = frame_idx / src_fps
+            else:
+                pts = time.monotonic() - start_mono
+
+            #  模拟真实摄像头按 FPS 推帧
+            if simulate_realtime and src_fps > 0:
+                now = time.monotonic()
+                expected = start_mono + pts
+                delay = expected - now
+                if delay > 0:
+                    await asyncio.sleep(delay)
 
             f = Frame(
                 camera_id=camera_id,
-                ts_unix=time.time(),
+                ts_unix=time.time(),   # 摄像头看到的真实世界时间戳
                 rgb=rgb,
                 frame_idx=frame_idx,
                 pts_in_video=pts,
-                vts=pts,   # 这里先给一个初值，真正的 vts 由 sampler 重写
+                vts=pts,               # sampler 会重写
             )
 
             await bus.publish(topic_for("frames_raw", camera_id), f)
             frame_idx += 1
 
-            # 防止阻塞事件循环
-            await asyncio.sleep(0)
+            await asyncio.sleep(0)  # 不阻塞事件循环
 
     finally:
+        await bus.publish(topic_for("frames_raw", camera_id), None)
         print(f"[frame_source] {camera_id} finished, releasing video")
         cap.release()
         try:
@@ -73,20 +98,23 @@ async def run_frame_source_raw(bus: AsyncBus, camera_id: str, url_or_path: str):
 async def run_sampler_equal_time_vts(
     bus: AsyncBus,
     camera_id: str,
-    target_fps: float = 30.0,
+    target_fps: float = 15,
     jitter_epsilon: float = 1e-4,
 ):
     """
-    Equal-interval sampling (with virtual time vts):
+    Equal-interval sampling (virtual time vts):
     - 从 frames_raw:<camera_id> 读取原始帧（可能帧率不稳）
-    - 按 target_fps 在“虚拟时间轴” vts 上均匀采样
-    - 输出到 frames:<camera_id> 的帧：
-        * pts_in_video = 来自原视频，用于前端进度条
-        * vts         = 均匀时间轴，用于 detector / aggregator 多路对齐
+    - 按 target_fps 在统一虚拟时间轴 vts 上均匀采样
+    - 输出到 frames:<camera_id>
+
+    修复点（新增）：
+    1. 使用 asyncio.wait_for 解决 raw 帧延迟导致 sampler 停止的问题。
+    2. 支持 frame_source 发送 None，作为“真正结束标志”。
+    3. 在 simulate_realtime 下不会提前退出。
     """
 
     step = 1.0 / max(1e-3, target_fps)
-    next_vts = None      # 下一次应该采样的虚拟时间点
+    next_vts = None
     sample_idx = 0
 
     topic_in = topic_for("frames_raw", camera_id)
@@ -94,27 +122,36 @@ async def run_sampler_equal_time_vts(
 
     async with bus.subscribe(topic_in, mode="fifo", maxsize=64) as sub:
         while True:
-            f: Frame = await sub.get()
 
-            # 初始化 vts 时钟：从 0 开始更稳定一点
+            # 关键修复：等待 raw 帧直到出现或超时
+            try:
+                f = await asyncio.wait_for(sub.get(), timeout=1.0)
+            except asyncio.TimeoutError:
+                # raw 帧暂未到达（simulate_realtime 情况下正常）
+                continue
+
+            #  真正的结束信号（来自 frame_source_raw）
+            if f is None:
+                break
+
+            # ---------- 原采样逻辑（不动） ----------
             if next_vts is None:
                 next_vts = 0.0
 
-            # 允许根据真实 pts 做一点 guard：
-            # 如果视频时间已经走到 t_real，就允许我们把若干 vts 落在当前帧上
             t_real = f.pts_in_video
-
             emitted = False
-            # 当真实时间 + jitter 已经追上 next_vts，就在这个位置“捡一帧”
+
+            # 均匀采样
             while t_real + jitter_epsilon >= next_vts:
                 newf = Frame(
                     camera_id=f.camera_id,
                     ts_unix=f.ts_unix,
                     rgb=f.rgb,
-                    frame_idx=sample_idx,     # 采样后的索引
-                    pts_in_video=f.pts_in_video,  # 保留原视频时间
-                    vts=next_vts,             # 统一虚拟时间
+                    frame_idx=sample_idx,
+                    pts_in_video=f.pts_in_video,
+                    vts=next_vts,
                 )
+
                 await bus.publish(topic_out, newf)
                 emitted = True
 
