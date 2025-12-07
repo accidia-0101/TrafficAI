@@ -95,7 +95,7 @@ async def eval_single_clip(cam: str, src: str, gt: int):
 
     # Pipeline
     frame_task = asyncio.create_task(run_frame_source_raw(bus, cam, src))
-    sampler_task = asyncio.create_task(run_sampler_equal_time_vts(bus, cam, target_fps=15))
+    sampler_task = asyncio.create_task(run_sampler_equal_time_vts(bus, cam, target_fps=30))
     detector_task = asyncio.create_task(
         accident_det.run_accident_detector_multi(bus, camera_ids=[cam], batch_size=4)
     )

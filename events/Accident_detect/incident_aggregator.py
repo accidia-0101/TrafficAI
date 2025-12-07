@@ -1,20 +1,21 @@
 """
 AccidentAggregator: aggregates per-frame detection results into stable accident events
-(partitioned-topic version, rewritten, dual-stage decision)
+(partitioned-topic version, rewritten, dual-stage decision, continuous-confidence version)
 --------------------------------------------------------------------
 Subscribe: accident:<camera_id>              # Per-frame detection results (Detection)
 Publish:   accidents.open:<camera_id>        # Accident-open event (once)
            accidents.close:<camera_id>       # Accident-close event (may be delayed due to merge window)
 
 Dual-stage decision:
-- Stage 1 (Suspicion): 使用低置信度阈值 + EMA 累积“怀疑”，避免单帧噪声直接触发开案。
-- Stage 2 (Validation): 在进入“怀疑期”后，再要求若干帧高置信度 happened 才真正开案。
+- Stage 1 (Suspicion): 使用连续的置信度证据 + soft_score 累积“怀疑”，而不是对单帧做硬二元划分。
+- Stage 2 (Validation): 在进入“怀疑期”后，再结合 EMA 和连续负帧判断，决定关案时机。
 
 外部接口保持不变：
 - 订阅/发布 topic 名不变
 - open/close 事件字段不变
 - __init__ / run / flush 签名不变
 """
+from __future__ import annotations
 
 # # -----------------------------------------------------------------------------
 # # Copyright (c) 2025
@@ -30,33 +31,41 @@ Dual-stage decision:
 
 
 
-from __future__ import annotations
-
 import time
 from dataclasses import dataclass
 from typing import Optional, Dict, Any
 
 from events.bus import AsyncBus, Detection, topic_for
-
+print(">>> LOADED Aggregator: CUSTOM VERSION <<<")
 
 
 _TOPIC_IN_BASE    = "accident"
 _TOPIC_OPEN_BASE  = "accidents.open"
 _TOPIC_CLOSE_BASE = "accidents.close"
 
-# ---------- EMA + 关案逻辑（保持高 precision） ----------
-_ALPHA = 0.25                     # EMA 平滑
-_EXIT_THR = 0.40                  # EMA 低于此阈值才允许进入关案计数
-_MIN_END_NEG_FRAMES = 8          # 关案严格：连续8帧负面才关案
-_MIN_DURATION_SEC = 0.3           # 最短事故时间，避免一闪而过误报
-_OCCLUSION_GRACE_SEC = 1.0        # 遮挡窗口（基于 vts）
-_MERGE_GAP_SEC = 5.0              # merge reopen 窗口
 
-# ---------- 开案参数（重点优化 recall + 保持高 precision） ----------
-_OPEN_CONF_MIN = 0.25             # ↓ 原 0.50 → 0.25（显著提高 recall）
-_SOFT_INC = 1.0                   # 正样本 soft_score 增量
-_SOFT_DEC = 0.28                  # ↓ 原 0.4 → 0.28（略提升 recall）
-_OPEN_SCORE_THR = 1.35            # ↓ 原 1.8 → 1.6 → 1.35（稍微易开案）
+#this has come to an elbow,no need to find better one
+
+# ---------- EMA + 关案逻辑 ----------
+_ALPHA = 0.22                     # EMA 更快响应下降
+_EXIT_THR = 0.38                  # 更容易满足关案条件（并不影响开案）
+_MIN_END_NEG_FRAMES = 8
+_MIN_DURATION_SEC = 0.15          # 缩短最短事故秒数（对小事故有效）
+_OCCLUSION_GRACE_SEC = 1.2
+_MERGE_GAP_SEC = 4.0              # 合并窗口缩短，更精准
+
+# ---------- 连续证据版开案参数 ----------
+_EVIDENCE_BASELINE = 0.10         # 原先 0.12 → 降低，捕获更多“弱事故”
+_EVIDENCE_MIN_CONF = 0.08         # 原先 0.10 → 降低，增加 soft_score 积累
+_SOFT_GAIN = 3.0                  # 原先 2.5 → 提升事故累积分数速度
+_SOFT_DECAY = 0.05                # 维持不变，避免爆炸式误报
+
+# ---------- 开案瞬间条件 ----------
+_OPEN_SCORE_THR = 0.75            # 原先 0.9 → 降低，更容易开案
+_MIN_OPEN_CONF = 0.15             # 原先 0.18 → 降低，更容易开案
+
+
+
 
 
 @dataclass
@@ -73,7 +82,7 @@ class _Incident:
 
 class AccidentAggregator:
     """
-    事故聚合器（偏向 precision）：
+    事故聚合器（连续证据版，偏向高 precision，兼顾 recall）：
     - 输入：Detection(type='accident', ..., vts, pts_in_video, confidence, happened)
     - 输出事件：
         * accidents.open:<cam>
@@ -97,7 +106,7 @@ class AccidentAggregator:
         # vts 时间线
         self._last_vts: Optional[float] = None
 
-        # 软连续计数（开案逻辑）
+        # soft_score：连续证据累积（开案逻辑）
         self._soft_score: float = 0.0
 
         # merge window: pending close 事件（等待是否要 merge reopen）
@@ -192,10 +201,11 @@ class AccidentAggregator:
                 await self._process(det)
 
     async def _process(self, det: Detection) -> None:
+
         # vts 为聚合时间轴；pts_in_video 仍保留给前端用（若需要）
         vts = float(getattr(det, "vts", getattr(det, "pts_in_video", 0.0)))
         conf = float(getattr(det, "confidence", 0.0))
-        happened = bool(getattr(det, "happened", False))
+        happened = bool(getattr(det, "happened", False))  # 暂时保留，便于日后扩展
         fidx = int(getattr(det, "frame_idx", 0))
 
         # 1) merge window 过期检测
@@ -212,21 +222,27 @@ class AccidentAggregator:
         # 3) 更新 EMA（用于关案）
         self.ema = _ALPHA * conf + (1.0 - _ALPHA) * self.ema
 
-        # 4) 开案软计数（soft_score）
-        if happened and conf >= _OPEN_CONF_MIN:
-            self._soft_score += _SOFT_INC
+        # 4) 连续证据版 soft_score 更新：
+        #    - conf 低于 EVIDENCE_MIN_CONF 视为纯背景，不加分
+        #    - conf 高于 EVIDENCE_BASELINE 部分视为“正向证据”，按比例放大累加
+        #    - 每帧有固定衰减，避免长时间积累导致误报
+        if conf >= _EVIDENCE_MIN_CONF:
+            # 只取高于 baseline 的部分作为正向证据
+            pos_part = max(0.0, conf - _EVIDENCE_BASELINE)
+            inc = pos_part * _SOFT_GAIN
         else:
-            self._soft_score -= _SOFT_DEC
+            inc = 0.0
 
+        self._soft_score += inc
+        self._soft_score -= _SOFT_DECAY
         if self._soft_score < 0.0:
             self._soft_score = 0.0
 
-        # ---------- 开案判定（偏向 precision 的旧逻辑替代） ----------
-        if self._open is None and self._soft_score >= _OPEN_SCORE_THR:
-            # 4.1 merge window 内的 reopen
+        # ---------- 开案判定（连续证据版） ----------
+        if self._open is None and self._soft_score >= _OPEN_SCORE_THR and conf >= _MIN_OPEN_CONF:
+            # 4.1 merge window 内 reopen：合并到 pending close
             if self._pending_close is not None and self._pending_close_time is not None:
                 if (vts - self._pending_close_time) <= _MERGE_GAP_SEC:
-                    # 合并 reopen 信息
                     self._merge_reopen_into_pending(
                         new_vts=vts,
                         new_peak=conf,
@@ -259,7 +275,7 @@ class AccidentAggregator:
                 start_idx=fidx,
                 end_idx=fidx,
                 peak_conf=conf,
-                pos_frames=1 if happened else 0,
+                pos_frames=1 if (happened or conf >= _MIN_OPEN_CONF) else 0,
             )
             self._open = inc
             await self._emit_open(inc)
@@ -272,7 +288,7 @@ class AccidentAggregator:
             inc.end_ts = vts
             inc.end_idx = fidx
             inc.peak_conf = max(inc.peak_conf, conf)
-            if happened:
+            if happened or conf >= _MIN_OPEN_CONF:
                 inc.pos_frames += 1
 
             # 关案条件：EMA 低 + 连续负帧
@@ -289,7 +305,7 @@ class AccidentAggregator:
                 self._open = None
                 self.ema = 0.0
                 self._neg_streak = 0
-                # soft_score 可以适当保留一点记忆，也可以归零：
+                # soft_score 重置，重新进入观察期
                 self._soft_score = 0.0
 
     # ---------- flush 收尾 ----------
@@ -329,5 +345,6 @@ class AccidentAggregator:
             did_close = True
 
         if not did_close:
-            print("[Aggregator] flush(): 无需结案。")
+            print("[Aggregator] flush(): no need to close")
+
 
