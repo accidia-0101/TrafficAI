@@ -1,0 +1,2 @@
+﻿event_type,camera_id,incident_id,session_id,frame_idx,pts_in_video,confidence,start_ts,end_ts,duration_sec,peak_confidence,pos_frames,raw_payload
+accident_open,cam-1,1773539537-cam-1-000001,1773539537,92,6.133333333333331,0.4765625,,,,0.4765625,,"{'type': 'accident_open', 'camera_id': 'cam-1', 'frame_idx': 92, 'pts_in_video': 6.133333333333331, 'confidence': 0.4765625, 'session_id': '1773539537', 'incident_id': '1773539537-cam-1-000001', 'peak_confidence': 0.4765625}"

@@ -21,144 +21,117 @@ os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
 from ultralytics import YOLO
 
-# ========= 需要你根据实际情况修改的两个路径 =========
+# ========= 路径配置：按你的实际情况修改 =========
 # 数据集根目录（包含 train/valid/test/data.yaml）
-ROOT = r"E:\Training\CCD-DATA"
+ROOT = r"E:\Training\Acci_Dataset"
 DATA_YAML = os.path.join(ROOT, "data.yaml")
 
-# 训练输出目录前缀
+# 训练输出目录
 PROJECT_NAME = "accident_training"
-RUN_NAME = "yolov8m_accident_fullbbox_2"
 
+# 建议把关键信息写进名字，方便后续实验对比
+RUN_NAME = "yolov8m_accident_localbox_v1_20260314"
+
+# 可根据机器情况修改
+DEVICE = 0          # GPU 编号；无 GPU 可改成 "cpu"
+WORKERS = 4
+BATCH_SIZE = 16
+IMG_SIZE = 640
+EPOCHS = 120
+PATIENCE = 40
+
+# 随机种子，方便复现实验
+SEED = 42
 # ======================================================
-FULL_BOX_LINE = "0 0.5 0.5 1.0 1.0\n"
-SUBSETS = ["train", "valid", "test"]
 
 
+def train_yolov8m_local_accident(data_yaml: str) -> str:
+    """
+    训练单类事故局部检测器（YOLOv8m）。
 
-def convert_label_file(path: str) -> None:
-    """将有内容的标签文件替换为全图 bbox，空文件保持为空。"""
-    try:
-        size = os.path.getsize(path)
-    except OSError:
-        return
+    任务定义：
+    - 1 类：accident
+    - 事故图：标注局部事故区域
+    - 非事故图：无框（空标签）
 
-    if size == 0:
-        # 无事故：空文件不变
-        return
+    系统目标：
+    - YOLO 提供“局部事故视觉证据”
+    - 后续 detector/aggregator 基于逐帧 evidence 做事件级判断
+    """
+    print("=== 启动 YOLOv8m 训练：单类局部事故检测 ===")
 
-    # 有事故：写成全图 bbox
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(FULL_BOX_LINE)
-
-
-def convert_all_labels(root: str) -> None:
-    """遍历 train/valid/test，把所有有内容的标签改成全图 bbox。"""
-    print("=== Step 1: 将所有事故标签转换为全图 bbox ===")
-    for subset in SUBSETS:
-        label_dir = os.path.join(root, subset, "labels")
-        if not os.path.isdir(label_dir):
-            print(f"[警告] labels 目录不存在，跳过: {label_dir}")
-            continue
-
-        print(f"处理目录: {label_dir}")
-        count_accident = 0
-        count_nonacc = 0
-
-        for fname in os.listdir(label_dir):
-            if not fname.endswith(".txt"):
-                continue
-            path = os.path.join(label_dir, fname)
-
-            size = os.path.getsize(path)
-            if size == 0:
-                # 无事故
-                count_nonacc += 1
-            else:
-                # 有事故
-                convert_label_file(path)
-                count_accident += 1
-
-        print(f"  ✓ 完成 {subset}: accident={count_accident}, non-accident={count_nonacc}")
-    print("=== 标签转换完成 ===\n")
-
-
-def sanity_check_dataset(root: str) -> None:
-    """简单再统计一次，以确认标签状态。"""
-    print("=== Step 2: 数据集 sanity check（确认 accident / non-accident 数量） ===")
-    for subset in SUBSETS:
-        label_dir = os.path.join(root, subset, "labels")
-        if not os.path.isdir(label_dir):
-            print(f"[警告] labels 目录不存在，跳过: {label_dir}")
-            continue
-
-        count_accident = 0
-        count_nonacc = 0
-        for fname in os.listdir(label_dir):
-            if not fname.endswith(".txt"):
-                continue
-            path = os.path.join(label_dir, fname)
-            size = os.path.getsize(path)
-            if size == 0:
-                count_nonacc += 1
-            else:
-                count_accident += 1
-
-        print(f"  {subset}: accident={count_accident}, non-accident={count_nonacc}")
-    print("=== Sanity check 完成 ===\n")
-
-
-def train_yolov8m(data_yaml: str) -> str:
-    """启动 YOLOv8m 训练，返回 best.pt 路径。"""
-    print("=== Step 3: 启动 YOLOv8m 训练 ===")
-
-    # 加载预训练 YOLOv8m
+    # 加载预训练权重
     model = YOLO("yolov8m.pt")
 
     results = model.train(
+        # ---------- 数据 ----------
         data=data_yaml,
-        epochs=120,
-        imgsz=640,
-        batch=16,
-        device=0,
-        workers=4,
-        patience=50,
 
-        # ---------- 优化 Recall + 稳定 Precision ----------
+        # ---------- 基础训练配置 ----------
+        epochs=EPOCHS,
+        imgsz=IMG_SIZE,
+        batch=BATCH_SIZE,
+        device=DEVICE,
+        workers=WORKERS,
+        patience=PATIENCE,
+
+        # ---------- 复现性 ----------
+        seed=SEED,
+        deterministic=True,
+
+        # ---------- 优化器 ----------
+        # AdamW 可以先作为 baseline 试验；
+        # 后续可再对比 auto / SGD
         optimizer="AdamW",
-        lr0=0.0015,  # ↑ 略提高初始学习率，有助 recall
+        lr0=0.0015,
         lrf=0.01,
 
-        # ---------- 降低增强强度（避免模型学不到事故关键特征） ----------
+        # ---------- 颜色增强 ----------
+        # 保守一些，避免颜色扰动过强破坏事故局部语义
         hsv_h=0.015,
-        hsv_s=0.4,  # ↓ 原 0.7 → 改 0.4（减少颜色漂移）
-        hsv_v=0.2,  # ↓ 原 0.4 → 改 0.2（减少亮度漂移）
-        fliplr=0.3,  # ↓ 原 0.5
+        hsv_s=0.4,
+        hsv_v=0.2,
+
+        # ---------- 几何增强 ----------
+        # 水平翻转保留一定比例，提升泛化
+        # 垂直翻转对交通场景通常不合理，因此关闭
+        fliplr=0.3,
         flipud=0.0,
+
+        # 保持几何增强较弱，避免局部事故区域被过度扭曲
         degrees=0.0,
-        scale=0.10,  # ↓ 原 0.2（避免缩放太大）
+        scale=0.10,
         shear=0.0,
+        translate=0.05,
 
-        # ---------- 最关键：让模型更稳定地学“全图二分类” ----------
-        mosaic=0.1,  # ↓ 原 1.0 → 0.1（强力减少噪声，提升 recall）
+        # ---------- 组合增强 ----------
+        # 对事故检测任务，过强 mosaic 常会破坏自然场景结构
+        # 这里保留很低比例，仅作为轻量增强
+        mosaic=0.1,
         mixup=0.0,
-        close_mosaic=20,  # 删除早期 mosaic 用处不大，让模型晚点再复现真实分布
+        close_mosaic=20,
 
-        # ---------- 更适合二分类 ----------
+        # ---------- 其他 ----------
         pretrained=True,
         project=PROJECT_NAME,
         name=RUN_NAME,
+        exist_ok=False,
+        verbose=True,
+        plots=True,
+        val=True,
+        save=True,
+        save_period=-1,
     )
 
-    # ultralytics 会在 results 中给出 run 的目录
-    save_dir = results.save_dir  # e.g. accident_training/yolov8m_accident_fullbbox
+    save_dir = str(results.save_dir)
     best_ckpt = os.path.join(save_dir, "weights", "best.pt")
+
     print(f"=== 训练结束，best 模型路径: {best_ckpt} ===\n")
     return best_ckpt
 
 
 def main():
-    # 路径检查
+    # ---------- 路径检查 ----------
     if not os.path.isdir(ROOT):
         raise RuntimeError(f"ROOT 目录不存在，请先修改脚本中的 ROOT: {ROOT}")
     if not os.path.isfile(DATA_YAML):
@@ -166,19 +139,16 @@ def main():
 
     print("使用数据集根目录:", ROOT)
     print("使用配置文件:", DATA_YAML)
+    print("训练输出目录:", PROJECT_NAME)
+    print("运行名称:", RUN_NAME)
     print("-" * 60)
 
-    # Step 1: 标签转换
-    convert_all_labels(ROOT)
+    # ---------- 启动训练 ----------
+    best_model = train_yolov8m_local_accident(DATA_YAML)
 
-    # Step 2: Sanity check
-    sanity_check_dataset(ROOT)
-
-    # Step 3: 训练 YOLOv8m
-    best_model = train_yolov8m(DATA_YAML)
-
-    print("\n全自动训练流程完成！")
-    print(f"➡ 你可以在 detector 里加载这个模型权重: {best_model}")
+    print("\n训练完成！")
+    print(f"➡ 你后续可以在 detector 中加载这个模型: {best_model}")
+    print("➡ 下一步建议：不要只看训练指标，还要接入你的 pipeline 做事件级回放测试。")
 
 
 if __name__ == "__main__":

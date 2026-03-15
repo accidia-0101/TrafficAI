@@ -52,6 +52,23 @@ class Detection:
     pts_in_video: float = 0.0
     vts: float = 0.0
 
+@dataclass(slots=True)
+class MotionEvidence:
+    type: str
+    camera_id: str
+    ts_unix: float
+    frame_idx: int
+    pts_in_video: float
+    vts: float
+    dt_vts: float
+
+    valid: bool
+    repeated_sample: bool
+    score_motion: float
+    score_mag: float
+    score_ori: float
+    active: bool
+
 
 # Subscriber Side
 class _Subscriber:
@@ -158,10 +175,8 @@ class AsyncBus:
                 print(f"[bus] subscribe_many -> {t}")
                 # 创建任务并保存引用
                 forward_tasks.append(asyncio.create_task(forward(s)))
-
         try:
             yield merged_q
-
         finally:
             # ★ 取消 forward tasks
             for task in forward_tasks:
