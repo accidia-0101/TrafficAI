@@ -1,4 +1,58 @@
 ##### AI is only use for learing how to write python in this project and detect potential bug
+TrafficTalk 🚦
+Conversational Video Analytics System for Road Monitoring
+
+TrafficTalk is an AI-powered intelligent traffic monitoring platform designed for small towns and resource-limited policing environments. The system combines real-time computer vision, event management, and LLM-based conversational querying to help authorities monitor roads, detect incidents, and analyze traffic conditions efficiently.
+
+📌 Features
+🚗 Real-time Accident Detection
+YOLOv8-based vehicle accident detection from live CCTV streams
+🌦️ Weather Recognition
+CNN classifier identifies:
+Clear
+Rainy
+Foggy conditions
+🗂️ Event Management System
+Automatically stores:
+timestamps
+camera locations
+weather conditions
+confidence scores
+💬 LLM + RAG Conversational Querying
+Ask natural language questions like:
+“How many accidents happened during rain last week?”
+“Show accidents near Camera 2 yesterday.”
+📊 Web Dashboard
+Live video monitoring
+Real-time alerts
+Conversational analytics interface
+🏗️ System Architecture
+
+TrafficTalk consists of four major modules:
+
+Video Analytics Engine
+Event Management System
+LLM + RAG Query Engine
+Web Dashboard Interface
+Architecture Overview
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 # Environment&Version
 python version=3.10.18,
 Anaconda version=25.5.1,
