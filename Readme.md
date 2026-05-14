@@ -1,9 +1,242 @@
 ##### AI is only use for learing how to write python in this project and detect potential bug
+# TrafficTalk 🚦  
+### Conversational Video Analytics System for Road Monitoring
+
+TrafficTalk is an AI-powered intelligent traffic monitoring platform designed for small towns and resource-limited policing environments. The system combines real-time computer vision, event management, and LLM-based conversational querying to help authorities monitor roads, detect incidents, and analyze traffic conditions efficiently.
+
+---
+
+## 📌 Features
+
+- 🚗 Real-time Accident Detection
+  - YOLOv8-based vehicle accident detection from live CCTV streams
+
+- 🌦️ Weather Recognition
+  - CNN classifier identifies:
+    - Clear
+    - Rainy
+    - Foggy conditions
+
+- 🗂️ Event Management System
+  - Automatically stores:
+    - timestamps
+    - camera locations
+    - weather conditions
+    - confidence scores
+
+- 💬 LLM + RAG Conversational Querying
+  - Ask natural language questions like:
+    - “How many accidents happened during rain last week?”
+    - “Show accidents near Camera 2 yesterday.”
+
+- 📊 Web Dashboard
+  - Live video monitoring
+  - Real-time alerts
+  - Conversational analytics interface
+
+---
+
+## 🏗️ System Architecture
+
+TrafficTalk consists of four major modules:
+
+1. Video Analytics Engine
+2. Event Management System
+3. LLM + RAG Query Engine
+4. Web Dashboard Interface
+
+### Architecture Overview
+
+```text
+Camera Streams
+       ↓
+YOLOv8 Accident Detection + Weather CNN
+       ↓
+Event Extraction & Database Storage
+       ↓
+PostgreSQL + pgvector
+       ↓
+LLM + RAG Query Engine
+       ↓
+Web Dashboard & Chat Interface
+```
+
+---
+
+## 🧠 Tech Stack
+
+| Component | Technology |
+|---|---|
+| Frontend | Next.js |
+| Backend | Django |
+| Database | PostgreSQL + pgvector |
+| Object Detection | YOLOv8 |
+| Weather Classification | CNN |
+| AI Query Engine | LLM + RAG |
+| Real-time Communication | WebSocket |
+| Deployment | GPU-enabled Linux Server |
+
+---
+
+## 📂 Project Structure
+
+```bash
+TrafficTalk/
+├── backend/
+│   ├── api/
+│   ├── detection/
+│   ├── rag_engine/
+│   └── database/
+│
+├── frontend/
+│   ├── components/
+│   ├── pages/
+│   └── services/
+│
+├── models/
+│   ├── yolov8/
+│   └── weather_classifier/
+│
+├── datasets/
+│
+├── docs/
+│
+└── README.md
+```
+
+---
+
+## ⚙️ Installation
+
+### 1. Clone Repository
+
+```bash
+git clone https://github.com/yourusername/TrafficTalk.git
+cd TrafficTalk
+```
+
+### 2. Backend Setup
+
+```bash
+cd backend
+
+python -m venv venv
+source venv/bin/activate
+
+pip install -r requirements.txt
+```
+
+### 3. Frontend Setup
+
+```bash
+cd frontend
+
+npm install
+npm run dev
+```
+
+### 4. Database Setup
+
+Install PostgreSQL and pgvector extension:
+
+```sql
+CREATE EXTENSION vector;
+```
+
+Run migrations:
+
+```bash
+python manage.py migrate
+```
+
+---
+
+## 🚀 Running the System
+
+### Start Backend
+
+```bash
+python manage.py runserver
+```
+
+### Start Frontend
+
+```bash
+npm run dev
+```
+
+### Start Detection Pipeline
+
+```bash
+python detection/run_detection.py
+```
+
+---
+
+## 🧪 Example Queries
+
+The conversational AI system supports natural language analytics:
+
+```text
+"How many accidents happened today?"
+
+"Show incidents during foggy weather."
+
+"Were accidents more common in rain or fog last week?"
+```
+
+---
+
+## 🧩 RAG Pipeline
+
+TrafficTalk uses a four-stage Retrieval-Augmented Generation pipeline:
+
+1. Query Understanding
+2. Hybrid Retrieval
+3. Context Augmentation
+4. Grounded Response Generation
+
+This allows non-technical users to interact with traffic analytics without SQL knowledge.
+
+---
+
+## 📸 Future Improvements
+
+- Multi-camera scaling
+- Predictive traffic risk analysis
+- Emergency response recommendation
+- Fine-grained weather classification
+- Edge-device deployment optimization
+- Mobile application support
+
+---
+
+## 🎯 Project Goal
+
+TrafficTalk aims to reduce operator workload and improve emergency response efficiency in smaller communities where monitoring resources are limited. By combining AI-powered video understanding with conversational interfaces, the platform makes intelligent traffic analytics accessible to frontline officers without specialized technical training.
+
+---
+
+## 👥 Authors
+
+- Liruo Wang — University of Ottawa
+- Zhenyan Xing — University of Ottawa
+
+---
+
+## 📄 License
+
+This project is for academic and research purposes.
+
 # Environment&Version
 python version=3.10.18,
 Anaconda version=25.5.1,
 pytorch=2.9,
 cuda=12.8
+
+
+---
+## 中文版本详情（开发用）
 # 后台模块解耦方法
 AsyncBus  异步并发（asynchronous concurrency）。
 帧事件，推理事件放在并发池中，暂时无法保证抗压能力，
